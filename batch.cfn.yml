@@ -1,0 +1,307 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Batch
+
+# A simple CFN template to create a Batch compute enviornment and CI/CD for that container.
+
+Parameters:
+
+  NetworkStackName:
+    Description: Name of an active CloudFormation stack that contains networking resources
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+
+  CodeBuildDockerImage:
+    Type: String
+    Default: aws/codebuild/docker:17.09.0
+
+  GitHubSourceRepo:
+    Type: String
+    Description: GitHub source repository - must contain a Dockerfile in the base
+
+  GitHubBranch:
+    Type: String
+    Default: master
+    Description: GitHub repository branch to trigger builds
+
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: "GitHub API token - see: https://github.com/blog/1509-personal-api-tokens"
+
+  GitHubUser:
+    Type: String
+    Description: GitHub username
+
+
+Resources:
+
+  # Modify this if you want to control ingress/egress
+  BatchInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Batch EC2 Security Group
+      VpcId:
+        Fn::ImportValue: !Sub ${NetworkStackName}-VpcID
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-BatchInstanceSecurityGroup
+
+  BatchComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      ComputeEnvironmentName: !Ref AWS::StackName
+      Type: MANAGED
+      State: ENABLED
+      ServiceRole: !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/AWSBatchServiceRole
+      ComputeResources:
+        MaxvCpus: 256
+        MinvCpus: 1
+        DesiredvCpus: 4
+        Type: EC2
+        InstanceRole: ecsInstanceRole
+        SecurityGroupIds:
+          - !GetAtt BatchInstanceSecurityGroup.GroupId
+        InstanceTypes:
+          - optimal
+        Subnets:
+          - Fn::ImportValue: !Sub ${NetworkStackName}-PrivateSubnet1ID
+          - Fn::ImportValue: !Sub ${NetworkStackName}-PrivateSubnet2ID
+
+  BatchJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref BatchComputeEnvironment
+      Priority: 1
+      State: ENABLED
+      JobQueueName: !Ref AWS::StackName
+
+  DefaultJobeServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: s3-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: !Sub arn:aws:s3:::${DefaultJobBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:*
+
+  DefaultJobBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+
+  CodePipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+
+  EcrDockerRepository:
+    Type: AWS::ECR::Repository
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ecr:GetAuthorizationToken
+                  - batch:RegisterJobDefinition
+              - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+              - Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrDockerRepository}
+                Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Type: LINUX_CONTAINER
+        Image: !Ref CodeBuildDockerImage
+        EnvironmentVariables:
+          - Name: REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrDockerRepository}
+          - Name: JOB_DEFINITION_NAME
+            Value: !Ref AWS::StackName
+          - Name: JOB_QUEUE_ARN
+            Value: !Ref BatchJobQueue
+          - Name: JOB_DEFINITION_ROLE_ARN
+            Value: !GetAtt DefaultJobeServiceRole.Arn
+          - Name: S3_BUCKET_NAME
+            Value: !Ref DefaultJobBucket
+      Name: !Ref AWS::StackName
+      ServiceRole: !Ref CodeBuildServiceRole
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: codepipeline-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - ecs:List*
+                  - ecs:Describe*
+                  - ecs:RegisterTaskDefinition
+                  - ecs:UpdateService
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - iam:PassRole
+              - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: App
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitHubSourceRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              OutputArtifacts:
+                - Name: App
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: App
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+Outputs:
+
+  Name:
+    Description: Batch Stack Name
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub ${AWS::StackName}-Name
+
+  EcrDockerRepositoryId:
+    Description: ECR ID
+    Value: !Ref EcrDockerRepository
+    Export:
+      Name: !Sub ${AWS::StackName}-EcrDockerRepositoryId
+
+  BatchComputeEnvironmentArn:
+    Description: Batch Compute Environment ARN
+    Value: !Ref BatchComputeEnvironment
+    Export:
+      Name: !Sub ${AWS::StackName}-BatchComputeEnvironmentArn
+
+  BatchJobQueueArn:
+    Description: Batch Job Queue ARN
+    Value: !Ref BatchJobQueue
+    Export:
+      Name: !Sub ${AWS::StackName}-BatchJobQueueArn
+
+  BatchInstanceSecurityGroup:
+    Description: Security group ID for batch instance
+    Value: !GetAtt BatchInstanceSecurityGroup.GroupId
+    Export:
+      Name: !Sub ${AWS::StackName}-BatchInstanceSecurityGroup
+
+  CodePipelineArtifactBucketName:
+    Value: !Ref CodePipelineArtifactBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-CodePipelineArtifactBucketName
+
+  CodePipelineArtifactBucketArn:
+    Value: !GetAtt CodePipelineArtifactBucket.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-CodePipelineArtifactBucketArn
+
+  DefaultJobBucketName:
+    Value: !Ref DefaultJobBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-DefaultJobBucketName
+
+  DefaultJobBucketArn:
+    Value: !GetAtt DefaultJobBucket.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-DefaultJobBucketArn
+
