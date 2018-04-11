@@ -137,6 +137,7 @@ Resources:
                   - logs:PutLogEvents
                   - ecr:GetAuthorizationToken
                   - batch:RegisterJobDefinition
+                  - iam:PassRole
               - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
                 Effect: Allow
                 Action:
@@ -198,10 +199,6 @@ Resources:
               - Resource: "*"
                 Effect: Allow
                 Action:
-                  - ecs:List*
-                  - ecs:Describe*
-                  - ecs:RegisterTaskDefinition
-                  - ecs:UpdateService
                   - codebuild:StartBuild
                   - codebuild:BatchGetBuilds
                   - iam:PassRole
