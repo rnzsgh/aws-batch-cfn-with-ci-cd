@@ -27,4 +27,4 @@ aws cloudformation create-stack --stack-name test-batch-1 --template-body file:/
 
 The [aws-batch-sample-job-python](https://github.com/rnzsgh/aws-batch-sample-job-python) repo provides an example job complete with
 the [buildspec.yml](https://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html) and
-a [batch-job-definition.json](https://docs.aws.amazon.com/batch/latest/userguide/job-definition-template.html) example.
+a [Job Definition Template](https://docs.aws.amazon.com/batch/latest/userguide/job-definition-template.html) example.
