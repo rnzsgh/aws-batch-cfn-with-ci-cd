@@ -158,6 +158,9 @@ Resources:
                   - logs:PutLogEvents
                   - ecr:GetAuthorizationToken
                   - batch:RegisterJobDefinition
+                  - events:PutRule
+                  - events:EnableRule
+                  - events:PutTargets
                   - iam:PassRole
               - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
                 Effect: Allow
@@ -198,8 +201,11 @@ Resources:
             Value: !Ref DefaultJobBucket
           - Name: JOB_QUEUE_ARN
             Value: !Ref BatchJobQueue
-          - Name: CLOUDWATCH_EVENTS_SUBMIT_BATCH_JOB_ROLE
+          - Name: CWE_SUBMIT_BATCH_JOB_ROLE
             Value: !Ref CloudWatchEventsSubmitBatchJobRole
+          - Name: CWE_SUBMIT_BATCH_JOB_ROLE_ARN
+            Value: !GetAtt CloudWatchEventsSubmitBatchJobRole.Arn
+
       Name: !Ref AWS::StackName
       ServiceRole: !Ref CodeBuildServiceRole
 
