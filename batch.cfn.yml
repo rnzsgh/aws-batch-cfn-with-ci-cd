@@ -58,9 +58,9 @@ Resources:
       State: ENABLED
       ServiceRole: !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/AWSBatchServiceRole
       ComputeResources:
+        MinvCpus: 0
         MaxvCpus: 256
-        MinvCpus: 1
-        DesiredvCpus: 4
+        DesiredvCpus: 0
         Type: EC2
         InstanceRole: ecsInstanceRole
         SecurityGroupIds:
@@ -101,6 +101,27 @@ Resources:
                 Effect: Allow
                 Action:
                   - s3:*
+
+  CloudWatchEventsSubmitBatchJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: s3-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: '*' # currently does not support resource level permissions
+                Effect: Allow
+                Action:
+                  - batch:SubmitJob
 
   DefaultJobBucket:
     Type: AWS::S3::Bucket
@@ -171,12 +192,14 @@ Resources:
             Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrDockerRepository}
           - Name: JOB_DEFINITION_NAME
             Value: !Ref AWS::StackName
-          - Name: JOB_QUEUE_ARN
-            Value: !Ref BatchJobQueue
           - Name: JOB_DEFINITION_ROLE_ARN
             Value: !GetAtt DefaultJobeServiceRole.Arn
           - Name: S3_BUCKET_NAME
             Value: !Ref DefaultJobBucket
+          - Name: JOB_QUEUE_ARN
+            Value: !Ref BatchJobQueue
+          - Name: CLOUDWATCH_EVENTS_SUBMIT_BATCH_JOB_ROLE
+            Value: !Ref CloudWatchEventsSubmitBatchJobRole
       Name: !Ref AWS::StackName
       ServiceRole: !Ref CodeBuildServiceRole
 
@@ -250,6 +273,7 @@ Resources:
                 - Name: BuildOutput
               RunOrder: 1
 
+
 Outputs:
 
   Name:
@@ -301,4 +325,14 @@ Outputs:
     Value: !GetAtt DefaultJobBucket.Arn
     Export:
       Name: !Sub ${AWS::StackName}-DefaultJobBucketArn
+
+  CloudWatchEventsSubmitBatchJobRoleName:
+    Value: !Ref CloudWatchEventsSubmitBatchJobRole
+    Export:
+      Name: !Sub ${AWS::StackName}-CloudWatchEventsSubmitBatchJobRole
+
+  CloudWatchEventsSubmitBatchJobRoleArn:
+    Value: !GetAtt CloudWatchEventsSubmitBatchJobRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-CloudWatchEventsSubmitBatchJobRoleArn
 
